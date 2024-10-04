@@ -1,0 +1,91 @@
+name: EKS Cluster Setup and Deployment
+
+on:
+  #push:
+  #  branches:
+  #    - main
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  EKS_CLUSTER_NAME: socks
+
+jobs:
+  setup-eks:
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Set up AWS credentials
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Set up Terraform
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_wrapper: false
+
+      # Initialize Terraform and Apply EKS Cluster
+      - name: Initialize Terraform
+        working-directory: gudlyf-eks
+        run: terraform init
+
+      - name: Apply Terraform to set up EKS cluster
+        working-directory: gudlyf-eks
+        run: terraform apply -auto-approve
+
+      # Configure kubectl
+      - name: Configure kubectl
+        run: |
+          aws eks --region ${{ env.AWS_REGION }} update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }}
+      
+
+      # Deploy the application
+      - name: Deploy the application
+        run: |
+          kubectl apply -f gudlyf-eks/kubernetes_files/deploy/nginx_dep.yml
+          kubectl apply -f gudlyf-eks/kubernetes_files/deploy/nginx_svc.yml
+          kubectl apply -f gudlyf-eks/kubernetes_files/deploy/hpa.yml
+
+      # Install kube-prometheus stack using Helm
+      - name: Install kube-prometheus stack
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+          helm install kube-prometheus prometheus-community/kube-prometheus-stack
+
+      # Apply monitoring configuration files
+      - name: Apply monitoring files
+        run: |
+          kubectl apply -f gudlyf-eks/kubernetes_files/Monitoring_files/custom-alert-rules.yaml
+          kubectl apply -f gudlyf-eks/kubernetes_files/Monitoring_files/custom-values.yml
+
+      # Install Elasticsearch and Kibana using Helm
+      - name: Install Elasticsearch and Kibana
+        run: |
+          kubectl create namespace fluentd
+          helm repo add elastic https://helm.elastic.co
+          helm repo update
+          helm install elasticsearch elastic/elasticsearch --version 7.17.3 -n fluentd --set replicas=1
+          helm install kibana elastic/kibana --version 7.17.3 -n fluentd
+
+      # Deploy Fluentd as a DaemonSet
+      - name: Deploy Fluentd
+        run: |
+          kubectl apply -f gudlyf-eks/kubernetes_files/Logging_files/fluentd-config-map.yaml
+          kubectl apply -f gudlyf-eks/kubernetes_files/Logging_files/fluentd-dapr-with-rbac.yaml
+
+      - name: setup CloudWatch agent on cluster
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/aws-samples/amazon-cloudwatch-container-insights/latest/k8s-deployment-manifest-templates/deployment-mode/daemonset/container-insights-monitoring/cloudwatch-namespace.yaml
+          kubectl apply -f https://raw.githubusercontent.com/aws-samples/amazon-cloudwatch-container-insights/latest/k8s-deployment-manifest-templates/deployment-mode/daemonset/container-insights-monitoring/cwagent/cwagent-serviceaccount.yaml
+          kubectl apply -f gudlyf-eks/kubernetes_files/cloudwatch/cw_configmap.yaml
+          kubectl apply -f https://raw.githubusercontent.com/aws-samples/amazon-cloudwatch-container-insights/latest/k8s-deployment-manifest-templates/deployment-mode/daemonset/container-insights-monitoring/cwagent/cwagent-daemonset.yaml
+          

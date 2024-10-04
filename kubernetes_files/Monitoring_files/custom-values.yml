@@ -1,0 +1,19 @@
+# custom-values.yaml
+prometheus:
+  service:
+    type:
+    nodePort: 30001
+    targetPort: 9090
+    port: 9090
+grafana:
+  service:
+    type:
+    nodePort: 30002
+    targetPort: 3000
+    port: 3000
+alertmanager:
+  service:
+    type:
+    nodePort: 30003
+    targetPort: 9093
+    port: 9093
